@@ -14,9 +14,14 @@ on:
     - cron: '*/30 * * * *'
 
 jobs:
-  sync:
+  sync-fork:
     runs-on: ubuntu-latest
     steps:
+    - name: Use Node.js 16
+      uses: actions/setup-node@v2
+      with:
+        node-version: 16
+        
     - name: Checkout
       uses: actions/checkout@v2
       with:
@@ -31,26 +36,52 @@ jobs:
         echo "git checkout ${{ env.MY_BRANCH }}"
         cp -fr .github/workflows/my1*.yaml /tmp/
         git reset --hard upstream/${{ env.UPSTREAM_BRANCH }}
+        if [ -d ".github" ]; then
+            mv .github ${{ env.ORIGINAL_REPOSITORY }}.github
+        else
+            mkdir .github
+        fi
         echo "git reset --hard upstream：后"
+        mkdir -p .github/workflows/
+        rm -fr .github > /dev/null
         mkdir -p .github/workflows/
         tree .github -a 
         cp -fr /tmp/my1*.yaml .github/workflows/
         echo "复制后，准备进入 - name: Push Changes"
         tree .github -a 
-        git config --global user.name "bot"
-        git config --global user.email "bto@github.com"
-        git add .github/workflows/my1*.yaml
-        git commit -m "bot actions"
 
-    - name: Push Changes
-      uses: ad-m/github-push-action@master
-      with:
-        github_token: ${{ secrets.MYGITHUB_TOKEN }}
-        branch: ${{ env.MY_BRANCH }}
-        force: true
+    - name: set git
+      run: |
+        echo "protocol=https\nhost=github.com\nusername=${{ secrets.MYGITHUB_USERNAME }}\npassword=${{ secrets.MYGITHUB_TOKEN }}" | git credential approve
+        git config --global user.name "test"
+        git config --global user.email "test@github.com"
 
-  release:
-    needs: sync
+    - name: Push
+      # uses: ad-m/github-push-action@master
+      # with:
+      #   github_token: ${{ secrets.MYGITHUB_TOKEN }}
+      #   branch: ${{ env.MY_BRANCH }}
+      #   force: true
+      run: |
+        echo "准备git add - name: Push Changes"
+        tree .github -a 
+        git add .
+        git commit -m "test"
+        git push -u -f origin ${{ env.MY_BRANCH }}
+
+    - name : 占位
+      run: |
+        echo "占位"
+
+    - name: Check if Push Failed
+      run: |
+        if [[ "${{ steps.Push.outcome }}" == "failure" ]]; then
+          echo "抱歉失败退出了"
+          exit 1
+        fi
+
+  sync-release:
+    needs: sync-fork
     runs-on: ubuntu-latest
     steps:
 
@@ -68,6 +99,7 @@ jobs:
           echo "skip=true" >> $GITHUB_ENV
         else
           echo "步骤2：在上游仓库中找到了发布版本。"
+          echo "skip=false" >> $GITHUB_ENV
           tag_name=$(echo $response | jq -r .tag_name)
           echo "tag_name=$tag_name" >> $GITHUB_ENV
           echo "tag_name is: $tag_name"
@@ -77,21 +109,20 @@ jobs:
           assets_url=$(echo $response | jq -r .assets_url)
           echo "assets_url=$assets_url" >> $GITHUB_ENV
           echo "assets_url is: $assets_url"
+
           assets_count=$(echo $response | jq -r '.assets | length')
           echo "assets_count=$assets_count" >> $GITHUB_ENV
           echo "assets_count is: $assets_count"
           if [[ "$assets_count" == '0' ]]; then
-            echo "步骤3：在上游仓库的发布版本中未找到资源。跳过创建新发布。"
-            echo "skip=true" >> $GITHUB_ENV
+            echo "步骤3：在上游仓库的发布版本中未找到资源。"
+            echo "skip_download=true" >> $GITHUB_ENV
+            echo "没有资源无资源！！！！！"
           else
             echo "步骤4：在上游仓库的发布版本中找到了资源。"
-            echo "skip=false" >> $GITHUB_ENV
+            echo "skip_download=false" >> $GITHUB_ENV
           fi
         fi
   
-
-      
-
     - name: Check if release exists and is new
       id: check_release
       run: |
@@ -118,7 +149,6 @@ jobs:
           done
         fi
       
-
     - name: Create Release
       id: create_release
       if: ${{ env.skip == 'false' }}
@@ -133,8 +163,8 @@ jobs:
         draft: false
         prerelease: false
 
-    - name: Download and Upload Release Assets
-      if: ${{ env.skip == 'false' }}
+    - name: download-update
+      if: ${{ env.skip_download == 'false' }}
       run: |
         echo "步骤9：开始下载和上传发布资源。"
         assets=$(curl --silent "${{ env.assets_url }}")
@@ -146,5 +176,13 @@ jobs:
           curl -LJO $asset_url
           gh release upload ${{ env.tag_name }} $asset_name --repo ${{ github.repository }}
         done
-    env:
-      GH_TOKEN: ${{ secrets.MYGITHUB_TOKEN }}
+      env:
+        GH_TOKEN: ${{ secrets.MYGITHUB_TOKEN }}
+
+    - name: Check if download Failed
+      run: |
+        if [[ "${{ steps.download-update.outcome }}" == "failure" ]]; then
+          echo "抱歉失败退出了"
+          exit 1
+        fi
+
